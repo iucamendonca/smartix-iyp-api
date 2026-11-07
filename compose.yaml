@@ -1,0 +1,54 @@
+name: smartix-iyp
+
+services:
+  api:
+    build: ./api
+    restart: unless-stopped
+    environment:
+      NEO4J_URI: bolt://iyp:7687
+      NEO4J_DATABASE: neo4j
+      NEO4J_USERNAME: ""
+      NEO4J_PASSWORD: ""
+      QUERY_TIMEOUT_SECONDS: "20"
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    depends_on:
+      iyp:
+        condition: service_started
+    networks: [backend]
+
+  iyp:
+    image: neo4j:5.26.28
+    restart: unless-stopped
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    environment:
+      NEO4J_AUTH: none
+    volumes:
+      - ${IYP_DATA_DIR:-./storage/data}:/data
+    ports:
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
+    networks: [backend]
+
+  # Container temporário: só é executado durante restauração/atualização.
+  # Os únicos serviços permanentes são API e IYP.
+  iyp-loader:
+    image: neo4j/neo4j-admin:2026-community-debian
+    profiles: [setup]
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    volumes:
+      - ${IYP_DATA_DIR:-./storage/data}:/data
+      - ./storage/dumps:/dumps:ro
+    entrypoint: ["/bin/bash", "-ec"]
+    command:
+      - |
+        if [ -d /data/databases/neo4j ]; then
+          echo 'Banco já existente; restauração ignorada.'
+        else
+          neo4j-admin database load neo4j --from-path=/dumps --verbose
+        fi
+    networks: [backend]
+
+networks:
+  backend:
+    driver: bridge

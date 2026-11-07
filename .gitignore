@@ -1,0 +1,26 @@
+# Ambientes locais e segredos
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+
+# Python / testes
+__pycache__/
+.pytest_cache/
+*.py[cod]
+.coverage
+htmlcov/
+
+# Banco IYP e dumps: NUNCA versionar (independente da localização no storage)
+/storage/
+*.dump
+*.dump.part
+
+# Saídas de execução, arquivos de backup e temporários
+*.log
+*.bak
+*.backup
+*.orig
+*.swp
+.DS_Store
