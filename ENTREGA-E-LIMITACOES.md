@@ -1,40 +1,48 @@
-# Entrega acadêmica — evidências, limitações e próximos testes
+# Validação e limitações — SmartIX IYP API v0.4
 
-Data de revisão: 07/11/2026. Versão: SmartIX IYP API 0.4.0 (candidata à entrega).
+Registro das verificações feitas no ambiente local (CachyOS) e das partes que ainda exigem trabalho. Última atualização deste documento: **12/11/2026**.
 
-## Confirmado
+## O que foi testado
 
-- Infraestrutura Docker com serviços `api` e `iyp`, e container de restauração temporário (`profile: setup`).
-- FastAPI `GET /health/ready` respondeu HTTP 200 conectado ao Neo4j no CachyOS.
-- Consultas por ASN, nomes e perfil sem domínios foram observadas funcionando na instância local.
-- No Neo4j, consulta `(:AS {asn:15169})-[:ORIGINATE]->(:BGPPrefix)` encontrou 1461 prefixos distintos da fonte `bgpkit.pfx2asn` (fotografia da consulta de 07/11/2026), além de outras fontes.
-- Consulta `(:Ranking)<-[r:RANK]-(d:DomainName)` com `r.rank<=1000` encontrou `google.com` e `amazonaws.com` em rankings diferentes.
-- 20 testes unitários com mock do driver Neo4j passaram neste ambiente. NÃO são testes de integração com a instância real.
+**Infraestrutura:** dois containers em execução (`api` e `iyp`). O endpoint `GET /health/ready` respondeu HTTP 200 e confirmou a conexão com o Neo4j. A base foi recuperada de um diretório apagado anteriormente e está separada da pasta de código.
 
-## Pendente (não declarar como pronto)
+**Consulta unificada (Neo4j real):** em 12/11, com `incluir_dominios=false`, foram executadas pesquisas por ASN 15169, nome Google, prefixo 8.8.8.0/24, país BR e tag Content. Todas retornaram resultados e nenhuma reportou erro parcial. Os exemplos registrados foram:
 
-- **Top domains por ASN**: timeout da consulta `/consulta?asn=15169&incluir_dominios=true&limite_dominios=5&ranking_max=1000`. A API retornou `perfil_parcial=true` e informou a seção que falhou. Os dados de ranking e de prefixos existem, mas isso não prova que o caminho conjunto até o ASN seja percorrível ou eficiente.
-- Medir plano de execução de top domains (`EXPLAIN` antes de `PROFILE`) e considerar começar pelo ranking, restringir fonte DNS e limitar candidatos **com indicação explícita de amostragem**. Nenhuma otimização foi validada ainda.
-- Executar testes de integração da busca por `pais`, `tag` e `prefixo` no dump real; validar se nomes de relação e filtros refletem o IYP de 01/11/2026.
-- Testar restaurar/atualizar dump em servidor isolado e avaliar incompatibilidades possíveis entre imagens Neo4j e neo4j-admin. Não presumir que atualizações automáticas estejam prontas para produção.
-- Validar `docker compose config` e documentação Swagger no host Linux.
+| Filtro | Resultado |
+| --- | --- |
+| ASN 15169 | AS15169 |
+| Nome Google (limite 2) | AS6432 e AS13949 |
+| Prefixo 8.8.8.0/24 | AS15169 |
+| País BR (limite 1) | AS1251 |
+| Tag Content (limite 1) | AS42 |
 
-## Interpretação correta
+**Grafo:** o Neo4j Browser exibiu, para AS15169, relações de nomes e tags, presença em IXPs e prefixos anunciados. Em testes anteriores, a fonte `bgpkit.pfx2asn` apresentou 1.461 prefixos distintos associados ao AS15169. Para `google.com` foram observados vínculos com rankings, HostName e resoluções DNS em fontes OpenINTEL.
 
-Uma resposta HTTP 200 com `perfil_parcial=true` **não é resultado completo**. `top_dominios: []` com erro não comprova ausência de sites. O país ligado ao AS, país do IXP e domínio terminado em `.br` são conceitos distintos. `SIBLING_OF` depende da fonte. Nomes podem ser ambíguos; prefixos e rankings são snapshots, não dados em tempo real.
+**Testes automatizados:** 20 testes unitários passaram no GitHub Actions, cobrindo respostas da API e falhas simuladas. O Neo4j é simulado nesses testes; por isso, eles não avaliam desempenho nem cobertura do dump real.
 
-## Verificações antes do push
+## O que ainda falta
 
-```bash
-# Na raiz do projeto; nunca apagar a base carregada
-python3 -m compileall -q api/app
-cd api && PYTHONPATH=. python3 -m pytest -q && cd ..
-docker compose config --quiet
-docker compose ps
-curl -i http://127.0.0.1:8000/health/ready
-curl -sS 'http://127.0.0.1:8000/consulta?asn=15169&incluir_dominios=false' | python3 -m json.tool
-# Opcional e mais pesado (pode retornar resposta parcial):
-curl -sS --max-time 90 'http://127.0.0.1:8000/consulta?asn=15169&incluir_dominios=true&limite_dominios=3&ranking_max=1000' | python3 -m json.tool
-```
+### Consulta de top domains
 
-Publicar apenas o código, scripts, Dockerfile, Compose e documentação. **Jamais publicar `/storage/`, `.env`, dumps, backups de código ou credenciais**. O `.gitignore` dessa versão protege esses caminhos se forem gerenciados dentro do repositório. Se o banco estiver em volume externo, verifique o caminho separadamente.
+A chamada `/consulta?asn=15169&incluir_dominios=true&limite_dominios=5&ranking_max=1000` retornou `perfil_parcial=true` e erro na seção `top_dominios` devido a timeout/indisponibilidade. Confirmamos isoladamente rankings, associações HostName–DomainName e resoluções DNS. **A cadeia completa domínio → IP → prefixo → AS ainda precisa ser validada e otimizada.** Não devemos interpretar `top_dominios: []` após erro como ausência de domínios.
+
+O `EXPLAIN` no Neo4j mostrou início por índice de ASN (`NodeUniqueIndexSeek`), seguido de expansões por relações. As cardinalidades exibidas eram estimativas, não contagens reais; ainda não foi testada uma implementação mais rápida.
+
+### Atualização automática
+
+`scripts/atualizar.sh` ainda não foi validado em uma instalação isolada com rollback. O procedimento precisa considerar montagem de volumes e recriação de containers, especialmente quando `IYP_DATA_DIR` aponta para um diretório externo. **Não habilitar `scripts/instalar_timer.sh` até concluir a revisão.**
+
+### Ambiente externo
+
+A aplicação local usa Neo4j sem autenticação, com portas ligadas a `127.0.0.1`. Para colocar no servidor da universidade, é necessário rever acesso, firewall, autenticação e publicação da API. A restauração e a atualização dos dumps devem ser testadas nesse ambiente.
+
+## Evidências para demonstração
+
+- `docker compose ps`: os dois serviços permanentes.
+- `curl -i http://127.0.0.1:8000/health/ready`: estado da API e conexão com o banco.
+- `bash scripts/testar_api.sh`: consultas reais por ASN e nome.
+- Swagger em `http://127.0.0.1:8000/docs`: execução do endpoint `GET /consulta`.
+- Neo4j Browser em `http://127.0.0.1:7474/browser/`: nós e arestas de AS15169.
+- [GitHub Actions](https://github.com/iucamendonca/smartix-iyp-api/actions): testes unitários.
+
+Observação: `perfil_parcial=false` só atesta que as seções **executadas** não reportaram erro. Quando `incluir_dominios=false`, isso não valida a busca de domínios.
